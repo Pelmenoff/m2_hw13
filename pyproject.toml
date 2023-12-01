@@ -20,6 +20,7 @@ slowapi = "^0.1.8"
 python-multipart = "^0.0.6"
 python-dotenv = "^1.0.0"
 alembic = "^1.13.0"
+cloudinary = "^1.36.0"
 
 
 [build-system]

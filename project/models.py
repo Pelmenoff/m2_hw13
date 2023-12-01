@@ -77,6 +77,7 @@ class User(Base):
     hashed_password = Column(String)
     is_verified = Column(Boolean, default=False)
     verification_token = Column(String, unique=True, index=True)
+    avatar_url = Column(String)
     contacts = relationship("Contact", back_populates="owner")
 
     def generate_verification_token(self):

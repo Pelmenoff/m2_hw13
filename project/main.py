@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request
+from fastapi import FastAPI, HTTPException, Depends, status, Request, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
+from cloudinary.uploader import upload
+from cloudinary.utils import cloudinary_url
 from datetime import datetime, timedelta
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -28,6 +30,7 @@ from .models import (
     UserCreate,
 )
 from .security import verify_password, get_password_hash
+import cloudinary
 import os
 
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -75,6 +78,11 @@ conf = ConnectionConfig(
     USE_CREDENTIALS=True,
 )
 
+cloudinary.config(
+  cloud_name =os.getenv("CLOUD_NAME"),
+  api_key =os.getenv("API_KEY"),
+  api_secret =os.getenv("API_SECRET"),
+)
 
 def get_current_user(
     token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
@@ -190,6 +198,20 @@ def search_contacts_api(
 def get_upcoming_birthdays(db: Session = Depends(get_db)):
     return upcoming_birthdays(db)
 
+@app.post("/users/{user_id}/avatar")
+async def upload_avatar(user_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    result = upload(file.file.read(), folder=f"user_avatars/{user_id}")
+    url, options = cloudinary_url(result['public_id'], format="jpg", crop="fill", width=100, height=100)
+
+    user.avatar_url = url
+    db.add(user)
+    db.commit()
+
+    return {"filename": file.filename, "url": url}
 
 def create_access_token(data: dict):
     to_encode = data.copy()
