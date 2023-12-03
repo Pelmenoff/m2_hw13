@@ -33,22 +33,29 @@ from .security import verify_password, get_password_hash
 import cloudinary
 import os
 
+# Load .env file for environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path=dotenv_path)
 
+# Retrieve secret key and algorithm from environment variables
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 
+# Initialize rate limiter using remote address as a unique identifier for each user
 limiter = Limiter(key_func=get_remote_address)
 
+# Define OAuth2 token URL configuration for token generation and authorization
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+# Create FastAPI instance
 app = FastAPI()
 
+# Define allowed origins for CORS (Cross-Origin Resource Sharing)
 origins = [ 
     "http://localhost:8000"
     ]
 
+# Setup middleware for CORS to allow specified origins and HTTP methods
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -56,17 +63,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add rate limiter to app state and exception handler for rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 def get_db():
+    """
+    Dependency that provides a database session and ensures it is closed after the request is finished.
+    
+    Yields:
+        Session: A database session from SessionLocal.
+    """
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-    
+
+# Configuration for FastAPI-Mail, using environment variables for sensitive data    
 conf = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
     MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
@@ -78,6 +94,7 @@ conf = ConnectionConfig(
     USE_CREDENTIALS=True,
 )
 
+# Configuration for Cloudinary service, using environment variables for authentication
 cloudinary.config(
   cloud_name =os.getenv("CLOUD_NAME"),
   api_key =os.getenv("API_KEY"),
@@ -87,6 +104,19 @@ cloudinary.config(
 def get_current_user(
     token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
 ):
+    """
+    Retrieve the current user from the database using the provided token.
+    
+    Args:
+        token (str): The OAuth2 token that is used to authenticate the user.
+        db (Session): The database session dependency.
+        
+    Returns:
+        User: The user instance that corresponds to the provided token.
+        
+    Raises:
+        HTTPException: If the token is invalid or the user does not exist.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -108,6 +138,19 @@ def get_current_user(
 
 @app.post("/register/")
 async def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    """
+    Register a new user in the database and send a verification email.
+    
+    Args:
+        user_in (UserCreate): The user registration information model.
+        db (Session): The database session dependency.
+        
+    Returns:
+        dict: A message indicating that the user was created and an email has been sent for verification.
+        
+    Raises:
+        HTTPException: If the email is already registered or verification token generation fails.
+    """
     db_user = get_user_by_email(db, email=user_in.email)
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -140,6 +183,19 @@ async def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
 
 @app.get("/verify/{token}")
 async def verify(token: str, db: Session = Depends(get_db)):
+    """
+    Verify a user's email address using the provided token.
+    
+    Args:
+        token (str): The verification token sent to the user's email.
+        db (Session): The database session dependency.
+        
+    Returns:
+        dict: A message indicating successful account verification.
+        
+    Raises:
+        HTTPException: If the provided verification token is invalid.
+    """
     db_user = db.query(User).filter(User.verification_token == token).first()
     
     if not db_user:
@@ -162,16 +218,55 @@ def create_new_contact(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Create a new contact associated with the current user.
+    
+    Args:
+        request (Request): The request instance.
+        contact (ContactCreate): The contact model containing the data for the new contact.
+        db (Session): The database session dependency.
+        current_user (User): The current user creating the contact, obtained via token authentication.
+    
+    Returns:
+        ContactResponse: The newly created contact data.
+    
+    Raises:
+        HTTPException: If the contact cannot be created.
+    """
     return create_contact(db, contact, current_user)
 
 
 @app.get("/contacts/", response_model=ContactListResponse)
 def get_all_contacts(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
+    """
+    Retrieve a list of contacts from the database with pagination.
+    
+    Args:
+        skip (int): The number of items to skip before starting to collect the result set.
+        limit (int): The maximum number of items to return.
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactListResponse: The list of contacts with the applied pagination.
+    """
     return {"contacts": get_contacts(db, skip=skip, limit=limit)}
 
 
 @app.get("/contacts/{contact_id}", response_model=ContactResponse)
 def get_contact(contact_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieve a single contact by its ID.
+    
+    Args:
+        contact_id (int): The unique identifier of the contact.
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactResponse: The requested contact data.
+    
+    Raises:
+        HTTPException: If the contact with the given ID is not found.
+    """
     return get_contact_by_id(db, contact_id)
 
 
@@ -179,11 +274,38 @@ def get_contact(contact_id: int, db: Session = Depends(get_db)):
 def update_existing_contact(
     contact_id: int, contact_data: ContactCreate, db: Session = Depends(get_db)
 ):
+    """
+    Update an existing contact's information by its ID.
+    
+    Args:
+        contact_id (int): The unique identifier of the contact to update.
+        contact_data (ContactCreate): The updated contact model containing the new data.
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactResponse: The updated contact data.
+    
+    Raises:
+        HTTPException: If the update operation fails.
+    """
     return update_contact(db, contact_id, contact_data.dict())
 
 
 @app.delete("/contacts/{contact_id}", response_model=ContactResponse)
 def delete_existing_contact(contact_id: int, db: Session = Depends(get_db)):
+    """
+    Delete an existing contact by its ID.
+    
+    Args:
+        contact_id (int): The unique identifier of the contact to delete.
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactResponse: The response model indicating successful deletion.
+    
+    Raises:
+        HTTPException: If the deletion operation fails or the contact is not found.
+    """
     return delete_contact(db, contact_id)
 
 
@@ -191,15 +313,50 @@ def delete_existing_contact(contact_id: int, db: Session = Depends(get_db)):
 def search_contacts_api(
     query: str, skip: int = 0, limit: int = 10, db: Session = Depends(get_db)
 ):
+    """
+    Search for contacts using a query string and apply pagination to the results.
+    
+    Args:
+        query (str): The search query string used to filter contacts.
+        skip (int): The number of items to skip before starting to collect the result set.
+        limit (int): The maximum number of items to return.
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactListResponse: A list of contacts that match the search query with applied pagination.
+    """
     return search_contacts(db, query, skip=skip, limit=limit)
 
 
 @app.get("/contacts/upcoming_birthdays/", response_model=ContactListResponse)
 def get_upcoming_birthdays(db: Session = Depends(get_db)):
+    """
+    Retrieve a list of contacts with upcoming birthdays.
+    
+    Args:
+        db (Session): The database session dependency.
+    
+    Returns:
+        ContactListResponse: A list of contacts with upcoming birthdays.
+    """
     return upcoming_birthdays(db)
 
 @app.post("/users/{user_id}/avatar")
 async def upload_avatar(user_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """
+    Upload a user avatar image to the server and update the user's avatar URL in the database.
+    
+    Args:
+        user_id (int): The ID of the user for whom the avatar is being uploaded.
+        file (UploadFile): The image file to upload.
+        db (Session): The database session dependency.
+    
+    Raises:
+        HTTPException: If the user is not found.
+    
+    Returns:
+        dict: A dictionary containing the filename and URL of the uploaded avatar.
+    """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -214,6 +371,15 @@ async def upload_avatar(user_id: int, file: UploadFile = File(...), db: Session 
     return {"filename": file.filename, "url": url}
 
 def create_access_token(data: dict):
+    """
+    Create a new access token using the provided data and expiry period.
+    
+    Args:
+        data (dict): The data to encode in the JWT.
+    
+    Returns:
+        str: The encoded JWT access token.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
@@ -225,6 +391,19 @@ def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
+    """
+    Authenticate a user and provide an access token and a refresh token.
+    
+    Args:
+        form_data (OAuth2PasswordRequestForm): The form data containing the username and password.
+        db (Session): The database session dependency.
+    
+    Raises:
+        HTTPException: If authentication fails.
+    
+    Returns:
+        dict: A dictionary with access token, refresh token, and token type.
+    """
     db_user = get_user_by_email(db, form_data.username)
     if db_user is None or not verify_password(
         form_data.password, db_user.hashed_password
@@ -245,12 +424,33 @@ def login_for_access_token(
 
 @app.post("/token/refresh/")
 def refresh_access_token(refresh_token: str = Depends(oauth2_scheme)):
+    """
+    Refresh an access token using a valid refresh token.
+    
+    Args:
+        refresh_token (str): The refresh token used to obtain a new access token.
+    
+    Raises:
+        HTTPException: If the refresh token is invalid.
+    
+    Returns:
+        dict: A dictionary containing the new access token and token type.
+    """
     payload = verify_refresh_token(refresh_token)
     access_token = create_access_token(data={"sub": payload["sub"]})
     return {"access_token": access_token, "token_type": "bearer"}
 
 
 def create_refresh_token(data: dict):
+    """
+    Create a new refresh token using the provided data and expiry period.
+    
+    Args:
+        data (dict): The data to encode in the JWT.
+    
+    Returns:
+        str: The encoded JWT refresh token.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(days=7)
     to_encode.update({"exp": expire})
@@ -259,6 +459,18 @@ def create_refresh_token(data: dict):
 
 
 def verify_refresh_token(token: str):
+    """
+    Verify the validity of a refresh token and decode its payload.
+    
+    Args:
+        token (str): The refresh token to verify and decode.
+    
+    Raises:
+        HTTPException: If the refresh token is invalid or expired.
+    
+    Returns:
+        dict: The decoded data payload from the refresh token.
+    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
